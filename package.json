@@ -1,0 +1,14 @@
+{
+  "name": "airtalk-clone",
+  "version": "1.0.0",
+  "description": "Stranger Audio Call Application",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.22.1",
+    "mysql2": "^3.19.1",
+    "socket.io": "^4.8.3"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
