@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIRTALK - Stranger Audio Call</title>
-    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="stylesheet" href="style.css?v=8">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
@@ -48,9 +48,10 @@
                 </div>
             </div>
 
-            <button class="top-nav-btn" id="openFriendsBtn">
+            <button class="top-nav-btn" id="openFriendsBtn" style="position: relative;">
                 <i class="fas fa-user-plus"></i>
                 <span>FRIENDS</span>
+                <div class="unread-badge" id="friendRequestBadge" style="display: none; top: -2px; right: -2px; transform: scale(0.9);">0</div>
             </button>
         </div>
 
@@ -305,7 +306,7 @@
 
     <!-- Scripts -->
     <script src="/socket.io/socket.io.js"></script>
-    <script src="script.js?v=10"></script>
+    <script src="script.js?v=12"></script>
 </body>
 
 </html>

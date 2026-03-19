@@ -31,7 +31,7 @@ async function initDB() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        try { await pool.query('ALTER TABLE users ADD COLUMN random_name VARCHAR(255)'); } catch(e) {}
+        try { await pool.query('ALTER TABLE users ADD COLUMN random_name VARCHAR(255)'); } catch (e) { }
         await pool.query(`
             CREATE TABLE IF NOT EXISTS friends (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -88,18 +88,18 @@ io.on('connection', (socket) => {
 
         try {
             await pool.query('USE airtalk_db');
-            
+
             // Check if user already exists
             const [userRows] = await pool.query('SELECT random_name, gender FROM users WHERE uuid = ?', [uuid]);
             let dbGender = 'any';
-            
+
             if (userRows.length > 0 && userRows[0].random_name) {
                 randomName = userRows[0].random_name;
                 dbGender = userRows[0].gender || 'any';
             } else {
                 await pool.query('INSERT IGNORE INTO users (uuid, socket_id, random_name, gender) VALUES (?, ?, ?, ?)', [uuid, socket.id, randomName, dbGender]);
             }
-            
+
             await pool.query('UPDATE users SET socket_id = ?, random_name = ?, gender = ? WHERE uuid = ?', [socket.id, randomName, dbGender, uuid]);
 
             if (!socket.userData) {
@@ -110,11 +110,11 @@ io.on('connection', (socket) => {
                 socket.userData.myGender = dbGender;
                 if (!socket.userData.blockedUUIDs) socket.userData.blockedUUIDs = [];
             }
-            
+
             // Fetch blocks
             const [blockRows] = await pool.query('SELECT blocked_uuid FROM blocks WHERE user_uuid = ?', [uuid]);
             socket.userData.blockedUUIDs = blockRows.map(r => r.blocked_uuid);
-            
+
             // Send back the official name and gender from DB so client stays synced securely over lifetime
             socket.emit('official-name', { name: randomName, gender: dbGender });
 
@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
         try {
             await pool.query('USE airtalk_db');
             await pool.query('UPDATE users SET random_name = ?, gender = ? WHERE uuid = ?', [data.name, data.gender, socket.userUUID]);
-        } catch(e) {}
+        } catch (e) { }
     });
 
     // User is ready to call
@@ -171,10 +171,10 @@ io.on('connection', (socket) => {
                 const aCountryMatches = A.targetCountry === 'any' || (A.targetCountry === 'same' && A.countryCode === B.countryCode);
                 const bCountryMatches = B.targetCountry === 'any' || (B.targetCountry === 'same' && B.countryCode === A.countryCode);
                 const countryMatch = aCountryMatches && bCountryMatches;
-                
+
                 // Check Blocks
-                const isBlocked = (A.blockedUUIDs && A.blockedUUIDs.includes(partnerSocket.userUUID)) || 
-                                  (B.blockedUUIDs && B.blockedUUIDs.includes(socket.userUUID));
+                const isBlocked = (A.blockedUUIDs && A.blockedUUIDs.includes(partnerSocket.userUUID)) ||
+                    (B.blockedUUIDs && B.blockedUUIDs.includes(socket.userUUID));
 
                 if (genderMatch && countryMatch && !isBlocked) {
                     foundIndex = i;
@@ -244,7 +244,7 @@ io.on('connection', (socket) => {
                 try {
                     await pool.query('USE airtalk_db');
                     await pool.query('INSERT IGNORE INTO blocks (user_uuid, blocked_uuid, reason) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, data.reason || 'other']);
-                    
+
                     if (!socket.userData) socket.userData = { blockedUUIDs: [] };
                     if (!socket.userData.blockedUUIDs) socket.userData.blockedUUIDs = [];
                     if (!socket.userData.blockedUUIDs.includes(partnerSocket.userUUID)) {
@@ -326,7 +326,7 @@ io.on('connection', (socket) => {
             if (!socket.userData) socket.userData = { countryCode: 'un', countryName: 'Unknown Location', randomName: 'Stranger', myGender: 'any', targetGender: 'any', targetCountry: 'any', blockedUUIDs: [] };
 
             await pool.query('USE airtalk_db');
-            
+
             // Check cross blocks
             const [blockRows] = await pool.query('SELECT id FROM blocks WHERE (user_uuid = ? AND blocked_uuid = ?) OR (user_uuid = ? AND blocked_uuid = ?)', [data.targetUUID, socket.userUUID, socket.userUUID, data.targetUUID]);
             if (blockRows.length > 0) {

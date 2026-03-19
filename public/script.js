@@ -388,6 +388,14 @@ socket.on('ice-candidate', async (candidate) => {
 
 socket.on('partner-disconnected', () => {
     addSystemMessage('Stranger disconnected.');
+    pendingFriendRequestFrom = null;
+    const badge = document.getElementById('friendRequestBadge');
+    if (badge) badge.style.display = 'none';
+    
+    if (sidePanel.classList.contains('open') && document.getElementById('panelTitle').textContent === 'Friend List') {
+        document.getElementById('openFriendsBtn').click(); // repaint panel if open
+    }
+    
     cleanupCall();
     if (autoCallCheckbox.checked) {
         setTimeout(startCall, 1000); // slight delay before calling again
@@ -481,31 +489,18 @@ addFriendBtn.addEventListener('click', () => {
     addSystemMessage('Friend request sent.');
 });
 
+let pendingFriendRequestFrom = null;
+
 socket.on('friend-request', () => {
-    const msgEl = document.createElement('div');
-    msgEl.classList.add('system-msg');
+    if (!currentPartner) return;
+    pendingFriendRequestFrom = { ...currentPartner };
 
-    const textSpan = document.createElement('span');
-    textSpan.textContent = 'Stranger sent a friend request. ';
-
-    const acceptBtn = document.createElement('button');
-    acceptBtn.className = 'accept-btn';
-    acceptBtn.textContent = 'Accept';
-
-    acceptBtn.onclick = () => {
-        socket.emit('accept-friend');
-        if (currentPartner && !friendsList.find(f => f.id === currentPartner.id)) {
-            friendsList.push({ ...currentPartner });
-        }
-        msgEl.textContent = 'You are now friends!';
-        addFriendBtn.style.color = '#2eac5f';
-    };
-
-    msgEl.appendChild(textSpan);
-    msgEl.appendChild(acceptBtn);
-
-    chatMessages.appendChild(msgEl);
-    chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+    // Update top friend icon badge
+    const badge = document.getElementById('friendRequestBadge');
+    if (badge) {
+        badge.textContent = '1';
+        badge.style.display = 'flex';
+    }
 });
 
 socket.on('friend-accepted', () => {
@@ -629,11 +624,30 @@ socket.on('chat-image', (imgData) => {
 });
 
 function addSystemMessage(text) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    
     const msgEl = document.createElement('div');
-    msgEl.classList.add('system-msg');
+    msgEl.classList.add('system-toast');
     msgEl.textContent = text;
-    chatMessages.appendChild(msgEl);
-    chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+    container.appendChild(msgEl);
+    
+    // Force reflow for animation
+    void msgEl.offsetWidth;
+    
+    msgEl.classList.add('show');
+    
+    setTimeout(() => {
+        msgEl.classList.remove('show');
+        setTimeout(() => {
+            if (msgEl.parentNode) msgEl.remove();
+        }, 400); // wait for fade out
+    }, 3500); // show for 3.5s
 }
 
 // 7. Online users count
@@ -662,7 +676,100 @@ const panelContent = document.getElementById('panelContent');
 
 document.getElementById('openFriendsBtn').addEventListener('click', () => {
     panelTitle.textContent = 'Friend List';
-    openPanel(friendsList);
+    sidePanel.classList.add('open');
+    panelContent.innerHTML = '<div style="text-align:center; color:#7b84aa; margin-top:20px;"><i class="fas fa-spinner fa-spin"></i> Loading context...</div>';
+
+    // Clear badge count instantly when opened
+    const badge = document.getElementById('friendRequestBadge');
+    if (badge) badge.style.display = 'none';
+
+    const ids = friendsList.map(item => item.id);
+
+    socket.emit('check-status', ids, (statuses) => {
+        panelContent.innerHTML = '';
+        let hasContent = false;
+
+        // Render Pending Request
+        if (pendingFriendRequestFrom) {
+            panelContent.innerHTML += `
+                <div style="font-size:12px; font-weight:700; color:#f1c40f; text-transform:uppercase; margin-bottom:5px;">Pending Request</div>
+                <div class="list-item" style="border: 1px dashed rgba(241,196,15,0.4); background: rgba(241,196,15,0.05); flex-direction:column; align-items:flex-start;">
+                    <div style="display:flex; align-items:center; width: 100%; margin-bottom: 10px;">
+                        <div class="avatar" style="background: rgba(241,196,15,0.2); color: #f1c40f;">
+                            <i class="fas fa-user-clock"></i>
+                        </div>
+                        <div class="list-item-info" style="margin-left: 10px;">
+                            <div class="list-item-title">${pendingFriendRequestFrom.name || 'Stranger'}</div>
+                            <div class="list-item-sub">Wants to be friends</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; width: 100%;">
+                        <button id="panelAcceptFriendBtn" style="flex:1; background:linear-gradient(135deg, #2eac5f, #3bcf76); color:white; border:none; border-radius:15px; padding:8px 0; cursor:pointer; font-weight:700; font-size:12px;">Accept</button>
+                        <button id="panelCancelFriendBtn" style="flex:1; background:transparent; color:#e74c3c; border:1px solid #e74c3c; border-radius:15px; padding:8px 0; cursor:pointer; font-weight:700; font-size:12px;">Cancel</button>
+                    </div>
+                </div>
+                <div style="height: 15px;"></div>
+            `;
+            hasContent = true;
+        }
+
+        // Render Friends List
+        if (friendsList.length > 0) {
+            panelContent.innerHTML += `<div style="font-size:12px; font-weight:700; color:#b8c1ec; text-transform:uppercase; margin-bottom:5px;">My Friends (${friendsList.length})</div>`;
+            friendsList.forEach(item => {
+                const isOnline = statuses[item.id] || false;
+                panelContent.innerHTML += `
+                    <div class="list-item">
+                        <div class="avatar">
+                            <i class="fas fa-user"></i>
+                            <div class="status-dot ${isOnline ? 'online' : 'offline'}"></div>
+                        </div>
+                        <div class="list-item-info">
+                            <div class="list-item-title">${item.name}</div>
+                            <div class="list-item-sub">${isOnline ? 'Online Now' : 'Offline'}</div>
+                        </div>
+                        ${isOnline ? `<button class="direct-call-btn" data-uuid="${item.id}" data-name="${item.name}"><i class="fas fa-phone-volume"></i></button>` : ''}
+                    </div>
+                `;
+            });
+            hasContent = true;
+        }
+
+        if (!hasContent) {
+            panelContent.innerHTML = '<div style="text-align:center; color:#7b84aa; margin-top:20px; font-weight: 500;">Nothing to show yet.<br>Call someone first! 🌏</div>';
+        }
+
+        // Connect panel buttons
+        const pAccept = document.getElementById('panelAcceptFriendBtn');
+        const pCancel = document.getElementById('panelCancelFriendBtn');
+
+        if (pAccept) {
+            pAccept.onclick = () => {
+                socket.emit('accept-friend');
+                if (pendingFriendRequestFrom && !friendsList.find(f => f.id === pendingFriendRequestFrom.id)) {
+                    friendsList.push({ ...pendingFriendRequestFrom });
+                }
+                pendingFriendRequestFrom = null;
+                const badge = document.getElementById('friendRequestBadge');
+                if (badge) badge.style.display = 'none';
+                
+                addFriendBtn.style.color = '#2eac5f';
+                addSystemMessage('You are now friends!');
+                
+                document.getElementById('openFriendsBtn').click(); // refresh list
+            };
+        }
+
+        if (pCancel) {
+            pCancel.onclick = () => {
+                pendingFriendRequestFrom = null;
+                const badge = document.getElementById('friendRequestBadge');
+                if (badge) badge.style.display = 'none';
+                
+                document.getElementById('openFriendsBtn').click(); // refresh list
+            };
+        }
+    });
 });
 
 document.querySelector('.history-link').addEventListener('click', (e) => {
