@@ -125,28 +125,52 @@ let isVideoOn = false;
 
 const servers = {
     iceServers: [
+        // Google STUN servers
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
+        // Cloudflare STUN
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        // Open Relay TURN — UDP 80
         {
             urls: 'turn:openrelay.metered.ca:80',
             username: 'openrelayproject',
             credential: 'openrelayproject'
         },
+        // Open Relay TURN — HTTPS 443
         {
             urls: 'turn:openrelay.metered.ca:443',
             username: 'openrelayproject',
             credential: 'openrelayproject'
         },
+        // Open Relay TURN — TLS over TCP (most firewall-friendly)
         {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            urls: 'turns:openrelay.metered.ca:443',
             username: 'openrelayproject',
             credential: 'openrelayproject'
+        },
+        // Numb TURN (fallback)
+        {
+            urls: 'turn:numb.viagenie.ca',
+            username: 'webrtc@live.com',
+            credential: 'muazkh'
+        },
+        // Xirsys-compatible public TURN
+        {
+            urls: 'turn:relay.backups.cz',
+            username: 'webrtc',
+            credential: 'webrtc'
         }
-    ]
+    ],
+    iceCandidatePoolSize: 10,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require'
 };
+
+// Buffer for ICE candidates received before remoteDescription is set
+let pendingIceCandidates = [];
 
 // 1. Get access to microphone
 async function getMedia() {
@@ -319,6 +343,9 @@ socket.on('matched', async (data) => {
     sysMsgDiv.innerHTML = `You are now talking to ${flagHTML} <b>${currentPartner.name}</b> from ${partnerData.countryName}. Say hi!`;
     chatMessages.appendChild(sysMsgDiv);
 
+    // Clear buffered candidates from previous call
+    pendingIceCandidates = [];
+
     peerConnection = new RTCPeerConnection(servers);
 
     // Add local tracks to peer connection
@@ -332,6 +359,8 @@ socket.on('matched', async (data) => {
     peerConnection.ontrack = (event) => {
         if (event.track.kind === 'audio') {
             remoteAudio.srcObject = event.streams[0];
+            // Ensure audio plays automatically
+            remoteAudio.play().catch(() => {});
         } else if (event.track.kind === 'video') {
             remoteVideo.srcObject = event.streams[0];
             logoCircle.style.display = 'none';
@@ -347,14 +376,39 @@ socket.on('matched', async (data) => {
         }
     };
 
+    // Send ICE candidates to peer
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
             socket.emit('ice-candidate', event.candidate);
         }
     };
 
+    // Monitor ICE connection state for diagnostics / auto-recovery
+    peerConnection.oniceconnectionstatechange = () => {
+        const state = peerConnection ? peerConnection.iceConnectionState : 'closed';
+        console.log('ICE connection state:', state);
+        if (state === 'failed') {
+            console.warn('ICE failed — attempting ICE restart');
+            // Attempt ICE restart
+            if (peerConnection && peerConnection.signalingState !== 'closed') {
+                peerConnection.restartIce ? peerConnection.restartIce() : null;
+            }
+        }
+        if (state === 'disconnected') {
+            console.warn('ICE disconnected — connection may recover');
+        }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection ? peerConnection.connectionState : 'closed';
+        console.log('Peer connection state:', state);
+    };
+
     if (data.role === 'caller') {
-        const offer = await peerConnection.createOffer();
+        const offer = await peerConnection.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        });
         await peerConnection.setLocalDescription(offer);
         socket.emit('offer', offer);
     }
@@ -364,22 +418,37 @@ socket.on('offer', async (data) => {
     if (!peerConnection) return;
     try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+        // Flush any buffered ICE candidates now that remote description is set
+        for (const c of pendingIceCandidates) {
+            try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+        }
+        pendingIceCandidates = [];
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         socket.emit('answer', answer);
-    } catch (e) { }
+    } catch (e) { console.error('Offer handling error', e); }
 });
 
 socket.on('answer', async (data) => {
     if (!peerConnection) return;
     try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-    } catch (e) { }
+        // Flush any buffered ICE candidates
+        for (const c of pendingIceCandidates) {
+            try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+        }
+        pendingIceCandidates = [];
+    } catch (e) { console.error('Answer handling error', e); }
 });
 
 socket.on('ice-candidate', async (candidate) => {
     if (!peerConnection) return;
     try {
+        // Buffer candidate if remote description not set yet to avoid errors
+        if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+            pendingIceCandidates.push(candidate);
+            return;
+        }
         await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (e) {
         console.error('Error adding received ice candidate', e);
