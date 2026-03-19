@@ -5,7 +5,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    maxHttpBufferSize: 1e8 // Increase max buffer size from default 1MB to 100MB for images
+    maxHttpBufferSize: 1e8
 });
 
 const mysql = require('mysql2/promise');
@@ -27,9 +27,11 @@ async function initDB() {
             CREATE TABLE IF NOT EXISTS users (
                 uuid VARCHAR(255) PRIMARY KEY,
                 socket_id VARCHAR(255),
+                random_name VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
+        try { await pool.query('ALTER TABLE users ADD COLUMN random_name VARCHAR(255)'); } catch(e) {}
         await pool.query(`
             CREATE TABLE IF NOT EXISTS friends (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -38,6 +40,16 @@ async function initDB() {
                 friend_name VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY unique_friendship (user_uuid, friend_uuid)
+            )
+        `);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS blocks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_uuid VARCHAR(255),
+                blocked_uuid VARCHAR(255),
+                reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_block (user_uuid, blocked_uuid)
             )
         `);
         await pool.query(`
@@ -63,28 +75,81 @@ let activePairs = new Map(); // socket.id -> peerSocket.id
 
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
-    
+
     // Broadcast total connections to everyone
     io.emit('online-count', io.engine.clientsCount);
 
-    socket.on('register', async (uuid) => {
+    socket.on('register', async (data) => {
+        const uuid = (typeof data === 'object') ? data.uuid : data;
+        let randomName = (typeof data === 'object') ? data.randomName : 'Stranger';
+        const countryName = (typeof data === 'object') ? data.countryName : 'Unknown';
+
         socket.userUUID = uuid;
+
         try {
             await pool.query('USE airtalk_db');
-            await pool.query('INSERT IGNORE INTO users (uuid, socket_id) VALUES (?, ?)', [uuid, socket.id]);
-            await pool.query('UPDATE users SET socket_id = ? WHERE uuid = ?', [socket.id, uuid]);
             
+            // Check if user already exists
+            const [userRows] = await pool.query('SELECT random_name, gender FROM users WHERE uuid = ?', [uuid]);
+            let dbGender = 'any';
+            
+            if (userRows.length > 0 && userRows[0].random_name) {
+                randomName = userRows[0].random_name;
+                dbGender = userRows[0].gender || 'any';
+            } else {
+                await pool.query('INSERT IGNORE INTO users (uuid, socket_id, random_name, gender) VALUES (?, ?, ?, ?)', [uuid, socket.id, randomName, dbGender]);
+            }
+            
+            await pool.query('UPDATE users SET socket_id = ?, random_name = ?, gender = ? WHERE uuid = ?', [socket.id, randomName, dbGender, uuid]);
+
+            if (!socket.userData) {
+                socket.userData = { randomName, countryName, countryCode: 'un', myGender: dbGender, targetGender: 'any', targetCountry: 'any', blockedUUIDs: [] };
+            } else {
+                socket.userData.randomName = randomName;
+                socket.userData.countryName = countryName;
+                socket.userData.myGender = dbGender;
+                if (!socket.userData.blockedUUIDs) socket.userData.blockedUUIDs = [];
+            }
+            
+            // Fetch blocks
+            const [blockRows] = await pool.query('SELECT blocked_uuid FROM blocks WHERE user_uuid = ?', [uuid]);
+            socket.userData.blockedUUIDs = blockRows.map(r => r.blocked_uuid);
+            
+            // Send back the official name and gender from DB so client stays synced securely over lifetime
+            socket.emit('official-name', { name: randomName, gender: dbGender });
+
             // Fetch friends and history
             const [friends] = await pool.query('SELECT friend_uuid as id, friend_name as name FROM friends WHERE user_uuid = ?', [uuid]);
             const [history] = await pool.query('SELECT partner_uuid as id, partner_name as name, DATE_FORMAT(called_at, "%h:%i %p") as timestamp FROM call_history WHERE user_uuid = ? ORDER BY called_at DESC LIMIT 10', [uuid]);
-            
+
             socket.emit('db-data', { friends, history });
-        } catch(e) { console.error("Register Error", e.message); }
+        } catch (e) { console.error("Register Error", e.message); }
+    });
+
+    socket.on('update-profile', async (data) => {
+        if (!socket.userData) {
+            socket.userData = {
+                randomName: data.name || 'Stranger',
+                countryName: data.countryName || 'Unknown',
+                countryCode: 'un', myGender: data.gender || 'any', targetGender: 'any', targetCountry: 'any'
+            };
+        } else {
+            if (data.name) socket.userData.randomName = data.name;
+            if (data.countryName) socket.userData.countryName = data.countryName;
+            if (data.gender) socket.userData.myGender = data.gender;
+        }
+
+        try {
+            await pool.query('USE airtalk_db');
+            await pool.query('UPDATE users SET random_name = ?, gender = ? WHERE uuid = ?', [data.name, data.gender, socket.userUUID]);
+        } catch(e) {}
     });
 
     // User is ready to call
     socket.on('join-wait', async (userData) => {
+        const oldBlocks = socket.userData && socket.userData.blockedUUIDs ? socket.userData.blockedUUIDs : [];
         socket.userData = userData || { countryCode: 'un', countryName: 'Unknown', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
+        socket.userData.blockedUUIDs = oldBlocks;
 
         if (!waitingUsers.includes(socket.id) && !activePairs.has(socket.id)) {
             // Find a partner that mutual matches filters
@@ -98,7 +163,7 @@ io.on('connection', (socket) => {
                 const B = partnerSocket.userData;
 
                 // Check Gender Match
-                const genderMatch = 
+                const genderMatch =
                     (A.targetGender === 'any' || A.targetGender === B.myGender) &&
                     (B.targetGender === 'any' || B.targetGender === A.myGender);
 
@@ -106,8 +171,12 @@ io.on('connection', (socket) => {
                 const aCountryMatches = A.targetCountry === 'any' || (A.targetCountry === 'same' && A.countryCode === B.countryCode);
                 const bCountryMatches = B.targetCountry === 'any' || (B.targetCountry === 'same' && B.countryCode === A.countryCode);
                 const countryMatch = aCountryMatches && bCountryMatches;
+                
+                // Check Blocks
+                const isBlocked = (A.blockedUUIDs && A.blockedUUIDs.includes(partnerSocket.userUUID)) || 
+                                  (B.blockedUUIDs && B.blockedUUIDs.includes(socket.userUUID));
 
-                if (genderMatch && countryMatch) {
+                if (genderMatch && countryMatch && !isBlocked) {
                     foundIndex = i;
                     break;
                 }
@@ -117,23 +186,25 @@ io.on('connection', (socket) => {
                 const partnerId = waitingUsers.splice(foundIndex, 1)[0];
                 const partnerSocket = io.sockets.sockets.get(partnerId);
                 const partnerData = partnerSocket ? partnerSocket.userData : { countryCode: 'un', countryName: 'Unknown' };
-                
+
                 activePairs.set(socket.id, partnerId);
                 activePairs.set(partnerId, socket.id);
 
                 // Notify both that they are matched
                 io.to(socket.id).emit('matched', { role: 'caller', partnerId, partnerData, partnerUUID: partnerSocket.userUUID });
                 io.to(partnerId).emit('matched', { role: 'callee', partnerId: socket.id, partnerData: socket.userData, partnerUUID: socket.userUUID });
-                
+
                 // Write to DB Call history
                 try {
                     await pool.query('USE airtalk_db');
-                    if(socket.userUUID && partnerSocket.userUUID) {
-                        await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, partnerData.countryName]);
-                        await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [partnerSocket.userUUID, socket.userUUID, socket.userData.countryName]);
+                    if (socket.userUUID && partnerSocket.userUUID) {
+                        const partnerDisplayName = partnerData.randomName || partnerData.countryName;
+                        const myDisplayName = socket.userData.randomName || socket.userData.countryName;
+                        await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, partnerDisplayName]);
+                        await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [partnerSocket.userUUID, socket.userUUID, myDisplayName]);
                     }
-                } catch(e) {}
-                
+                } catch (e) { }
+
                 console.log(`Matched ${socket.id} with ${partnerId}`);
             } else {
                 waitingUsers.push(socket.id);
@@ -164,6 +235,30 @@ io.on('connection', (socket) => {
         endCall(socket.id);
     });
 
+    // Report and Block functionality
+    socket.on('report-block', async (data) => {
+        const partnerId = activePairs.get(socket.id);
+        if (partnerId) {
+            const partnerSocket = io.sockets.sockets.get(partnerId);
+            if (partnerSocket && socket.userUUID && partnerSocket.userUUID) {
+                try {
+                    await pool.query('USE airtalk_db');
+                    await pool.query('INSERT IGNORE INTO blocks (user_uuid, blocked_uuid, reason) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, data.reason || 'other']);
+                    
+                    if (!socket.userData) socket.userData = { blockedUUIDs: [] };
+                    if (!socket.userData.blockedUUIDs) socket.userData.blockedUUIDs = [];
+                    if (!socket.userData.blockedUUIDs.includes(partnerSocket.userUUID)) {
+                        socket.userData.blockedUUIDs.push(partnerSocket.userUUID);
+                    }
+                } catch (e) {
+                    console.error("DB Block error:", e.message);
+                }
+            }
+            // Disconnect immediately after block
+            endCall(socket.id);
+        }
+    });
+
     // Friend request functionality
     socket.on('friend-request', () => {
         const partnerId = activePairs.get(socket.id);
@@ -176,15 +271,17 @@ io.on('connection', (socket) => {
         const partnerId = activePairs.get(socket.id);
         if (partnerId) {
             io.to(partnerId).emit('friend-accepted');
-            
+
             const partnerSocket = io.sockets.sockets.get(partnerId);
             if (partnerSocket && socket.userUUID && partnerSocket.userUUID) {
                 try {
+                    const partnerDisplayName = partnerSocket.userData.randomName || partnerSocket.userData.countryName;
+                    const myDisplayName = socket.userData.randomName || socket.userData.countryName;
                     await pool.query('USE airtalk_db');
-                    await pool.query('INSERT IGNORE INTO friends (user_uuid, friend_uuid, friend_name) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, partnerSocket.userData.countryName]);
-                    await pool.query('INSERT IGNORE INTO friends (user_uuid, friend_uuid, friend_name) VALUES (?, ?, ?)', [partnerSocket.userUUID, socket.userUUID, socket.userData.countryName]);
+                    await pool.query('INSERT IGNORE INTO friends (user_uuid, friend_uuid, friend_name) VALUES (?, ?, ?)', [socket.userUUID, partnerSocket.userUUID, partnerDisplayName]);
+                    await pool.query('INSERT IGNORE INTO friends (user_uuid, friend_uuid, friend_name) VALUES (?, ?, ?)', [partnerSocket.userUUID, socket.userUUID, myDisplayName]);
                 } catch (e) {
-                     console.error("DB Friend error:", e.message);
+                    console.error("DB Friend error:", e.message);
                 }
             }
         }
@@ -219,86 +316,97 @@ io.on('connection', (socket) => {
         console.log('User disconnected:', socket.id);
         endCall(socket.id);
         waitingUsers = waitingUsers.filter(id => id !== socket.id);
-        
+
         // Broadcast new total connections
         io.emit('online-count', io.engine.clientsCount);
     });
 
     socket.on('request-direct-call', async (data) => {
         try {
-            if (!socket.userData) socket.userData = { countryCode: 'un', countryName: 'Unknown Location', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
-            
+            if (!socket.userData) socket.userData = { countryCode: 'un', countryName: 'Unknown Location', randomName: 'Stranger', myGender: 'any', targetGender: 'any', targetCountry: 'any', blockedUUIDs: [] };
+
             await pool.query('USE airtalk_db');
+            
+            // Check cross blocks
+            const [blockRows] = await pool.query('SELECT id FROM blocks WHERE (user_uuid = ? AND blocked_uuid = ?) OR (user_uuid = ? AND blocked_uuid = ?)', [data.targetUUID, socket.userUUID, socket.userUUID, data.targetUUID]);
+            if (blockRows.length > 0) {
+                socket.emit('direct-call-declined');
+                return;
+            }
+
             const [rows] = await pool.query('SELECT socket_id FROM users WHERE uuid = ?', [data.targetUUID]);
             if (rows.length > 0) {
                 const targetSocketId = rows[0].socket_id;
                 const targetSocket = io.sockets.sockets.get(targetSocketId);
-                
+
                 if (targetSocket && !activePairs.has(targetSocketId)) {
-                    io.to(targetSocketId).emit('incoming-direct-call', { callerUUID: socket.userUUID, callerName: socket.userData.countryName });
+                    io.to(targetSocketId).emit('incoming-direct-call', { callerUUID: socket.userUUID, callerName: socket.userData.randomName || socket.userData.countryName });
                 } else {
                     socket.emit('direct-call-declined');
                 }
             } else {
-                socket.emit('direct-call-declined'); 
+                socket.emit('direct-call-declined');
             }
-        } catch(e) { console.error('request call err', e.message); }
+        } catch (e) { console.error('request call err', e.message); }
     });
 
     socket.on('accept-direct-call', async (data) => {
         try {
-            if (!socket.userData) socket.userData = { countryCode: 'un', countryName: 'Unknown Location', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
-            
+            if (!socket.userData) socket.userData = { countryCode: 'un', countryName: 'Unknown Location', randomName: 'Stranger', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
+
             await pool.query('USE airtalk_db');
             const [rows] = await pool.query('SELECT socket_id FROM users WHERE uuid = ?', [data.callerUUID]);
             if (rows.length > 0) {
                 const callerSocketId = rows[0].socket_id;
                 const callerSocket = io.sockets.sockets.get(callerSocketId);
-                
+
                 if (callerSocket && !activePairs.has(callerSocketId) && !activePairs.has(socket.id)) {
-                    if (!callerSocket.userData) callerSocket.userData = { countryCode: 'un', countryName: 'Unknown Location', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
-                    
+                    if (!callerSocket.userData) callerSocket.userData = { countryCode: 'un', countryName: 'Unknown Location', randomName: 'Stranger', myGender: 'any', targetGender: 'any', targetCountry: 'any' };
+
                     activePairs.set(socket.id, callerSocketId);
                     activePairs.set(callerSocketId, socket.id);
-                    
+
                     const partnerData = callerSocket.userData;
                     const myData = socket.userData;
-                    
+
                     // Remove both from waiting room explicitly
                     waitingUsers = waitingUsers.filter(id => id !== socket.id && id !== callerSocketId);
 
-                    await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [socket.userUUID, callerSocket.userUUID, partnerData.countryName]);
-                    await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [callerSocket.userUUID, socket.userUUID, myData.countryName]);
+                    const partnerDisplayName = partnerData.randomName || partnerData.countryName;
+                    const myDisplayName = myData.randomName || myData.countryName;
+
+                    await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [socket.userUUID, callerSocket.userUUID, partnerDisplayName]);
+                    await pool.query('INSERT INTO call_history (user_uuid, partner_uuid, partner_name) VALUES (?, ?, ?)', [callerSocket.userUUID, socket.userUUID, myDisplayName]);
 
                     io.to(callerSocketId).emit('matched', { role: 'caller', partnerId: socket.id, partnerData: myData, partnerUUID: socket.userUUID });
                     io.to(socket.id).emit('matched', { role: 'callee', partnerId: callerSocketId, partnerData: partnerData, partnerUUID: callerSocket.userUUID });
                 }
             }
-        } catch(e) { console.error('accept call err', e.message); }
+        } catch (e) { console.error('accept call err', e.message); }
     });
 
     socket.on('decline-direct-call', async (data) => {
-         try {
-             await pool.query('USE airtalk_db');
-             const [rows] = await pool.query('SELECT socket_id FROM users WHERE uuid = ?', [data.callerUUID]);
-             if (rows.length > 0) {
-                 io.to(rows[0].socket_id).emit('direct-call-declined', { reason: data.reason });
-             }
-         } catch(e) { console.error('decline call err', e.message); }
+        try {
+            await pool.query('USE airtalk_db');
+            const [rows] = await pool.query('SELECT socket_id FROM users WHERE uuid = ?', [data.callerUUID]);
+            if (rows.length > 0) {
+                io.to(rows[0].socket_id).emit('direct-call-declined', { reason: data.reason });
+            }
+        } catch (e) { console.error('decline call err', e.message); }
     });
 
     socket.on('check-status', async (uuids, callback) => {
         if (!uuids || !uuids.length) return callback({});
         const statuses = {};
         try {
-             await pool.query('USE airtalk_db');
-             const placeholders = uuids.map(() => '?').join(',');
-             const [rows] = await pool.query(`SELECT uuid, socket_id FROM users WHERE uuid IN (${placeholders})`, uuids);
-             rows.forEach(r => {
-                 // Check if their socket_id is currently active
-                 statuses[r.uuid] = io.sockets.sockets.has(r.socket_id);
-             });
-        } catch(e) {}
+            await pool.query('USE airtalk_db');
+            const placeholders = uuids.map(() => '?').join(',');
+            const [rows] = await pool.query(`SELECT uuid, socket_id FROM users WHERE uuid IN (${placeholders})`, uuids);
+            rows.forEach(r => {
+                // Check if their socket_id is currently active
+                statuses[r.uuid] = io.sockets.sockets.has(r.socket_id);
+            });
+        } catch (e) { }
         if (typeof callback === 'function') callback(statuses);
     });
 

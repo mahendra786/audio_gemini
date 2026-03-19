@@ -21,12 +21,13 @@ const videoContainer = document.getElementById('videoContainer');
 const callTimerVideo = document.getElementById('callTimerVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const localVideo = document.getElementById('localVideo');
+const expandVideoBtn = document.getElementById('expandVideoBtn');
 
 // UUID Generator
 function getOrCreateUUID() {
     let uuid = localStorage.getItem('airtalk_uuid');
     if (!uuid) {
-        uuid = 'xxxx-xxxx-4xxx-yxxx'.replace(/[xy]/g, function(c) {
+        uuid = 'xxxx-xxxx-4xxx-yxxx'.replace(/[xy]/g, function (c) {
             var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
             return v.toString(16);
         });
@@ -36,8 +37,56 @@ function getOrCreateUUID() {
 }
 const myUUID = getOrCreateUUID();
 
+let myProfileName = 'Stranger';
+let myCurrentGender = localStorage.getItem('airtalk_gender');
+
+const onboardOverlay = document.getElementById('onboardOverlay');
+const onboardForm = document.getElementById('onboardForm');
+
+function syncProfile() {
+    document.getElementById('myProfileName').textContent = myProfileName || 'Stranger';
+    const gSelect = document.getElementById('myGender');
+    if (myCurrentGender) {
+        gSelect.value = myCurrentGender;
+        gSelect.disabled = true; // Lock the gender filter to their actual gender
+    }
+    socket.emit('update-profile', { name: myProfileName, gender: myCurrentGender, countryName: myCountryName });
+}
+
 socket.on('connect', () => {
     socket.emit('register', myUUID);
+    if (!myCurrentGender) {
+        onboardOverlay.classList.add('show');
+    } else {
+        syncProfile();
+    }
+});
+
+onboardForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const genderInput = document.getElementById('onboardGender').value;
+
+    if (genderInput) {
+        myProfileName = 'Stranger';
+        myCurrentGender = genderInput;
+        localStorage.setItem('airtalk_name', 'Stranger');
+        localStorage.setItem('airtalk_gender', genderInput);
+
+        onboardOverlay.classList.remove('show');
+        syncProfile();
+    }
+});
+
+socket.on('official-name', (data) => {
+    myProfileName = 'Stranger';
+    document.getElementById('myProfileName').textContent = 'Stranger';
+    if (data.gender && data.gender !== 'any') {
+        myCurrentGender = data.gender;
+        localStorage.setItem('airtalk_gender', data.gender);
+        const gSelect = document.getElementById('myGender');
+        gSelect.value = data.gender;
+        gSelect.disabled = true;
+    }
 });
 
 socket.on('db-data', (data) => {
@@ -67,8 +116,8 @@ let isMuted = false;
 let callInterval = null;
 let callStartTime = null;
 
-let callHistory = []; 
-let friendsList = []; 
+let callHistory = [];
+let friendsList = [];
 let currentPartner = null;
 
 let videoTrack = null;
@@ -102,14 +151,14 @@ const servers = {
 // 1. Get access to microphone
 async function getMedia() {
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ 
+        localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true,
                 sampleRate: 48000
-            }, 
-            video: false 
+            },
+            video: false
         });
     } catch (err) {
         console.error('Error accessing media devices.', err);
@@ -132,10 +181,11 @@ function startCall() {
     const targetGender = document.getElementById('targetGender').value;
     const targetCountry = document.getElementById('targetCountry').value;
 
-    socket.emit('join-wait', { 
-        countryCode: myCountryCode, 
+    socket.emit('join-wait', {
+        countryCode: myCountryCode,
         countryName: myCountryName,
-        myGender: myGender,
+        randomName: myProfileName,
+        myGender: myCurrentGender,
         targetGender: targetGender,
         targetCountry: targetCountry
     });
@@ -149,7 +199,7 @@ function endCall() {
     socket.emit('end-call');
     cleanupCall();
     if (autoCallCheckbox.checked) {
-       startCall();
+        startCall();
     }
 }
 
@@ -159,7 +209,7 @@ function cleanupCall() {
         peerConnection = null;
     }
     isCalling = false;
-    
+
     if (currentPartner) {
         let ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         // Don't add duplicate immediate rows to history array if exists, keep top 10
@@ -173,15 +223,20 @@ function cleanupCall() {
         if (callHistory.length > 10) callHistory.pop();
         currentPartner = null;
     }
-    
+
     // UI Reset
     logoCircle.classList.remove('active-call');
     callTimer.style.display = 'none';
     clearInterval(callInterval);
-    
+
     logoCircle.style.display = 'flex';
     videoContainer.style.display = 'none';
-    
+    videoContainer.classList.remove('fullscreen');
+    document.body.classList.remove('video-fullscreen');
+    if (expandVideoBtn) {
+        expandVideoBtn.querySelector('i').className = 'fas fa-expand';
+    }
+
     if (videoTrack) {
         videoTrack.stop();
         videoTrack = null;
@@ -193,8 +248,8 @@ function cleanupCall() {
     videoBtnText.textContent = 'Video';
     remoteVideo.srcObject = null;
     localVideo.srcObject = null;
-    
-    callBtn.style.backgroundColor = ''; 
+
+    callBtn.style.backgroundColor = '';
     callBtn.style.background = 'linear-gradient(135deg, #2eac5f, #3bcf76)';
     callBtn.innerHTML = '<i class="fas fa-phone-alt"></i>';
     callBtn.nextElementSibling.textContent = 'Call';
@@ -216,30 +271,32 @@ socket.on('waiting', () => {
 
 socket.on('matched', async (data) => {
     isCalling = true;
-    
+
     // Reveal Video Button
     videoBtnWrapper.style.display = 'flex';
-    
+
     callBtn.style.background = 'linear-gradient(135deg, #e74c3c, #c0392b)'; // Red for end call
     callBtn.innerHTML = '<i class="fas fa-phone-slash"></i>';
     callBtn.nextElementSibling.textContent = 'Hang up';
-    
+
     // Country Logic
-    const partnerData = data.partnerData || { countryCode: 'un', countryName: 'Unknown Location' };
-    const flagHTML = partnerData.countryCode !== 'un' 
-        ? `<img src="https://flagcdn.com/24x18/${partnerData.countryCode}.png" alt="${partnerData.countryName}" style="vertical-align: middle; margin: 0 4px; border-radius: 2px;">` 
+    const partnerData = data.partnerData || { countryCode: 'un', countryName: 'Unknown Location', randomName: 'Stranger' };
+    const flagHTML = partnerData.countryCode !== 'un'
+        ? `<img src="https://flagcdn.com/24x18/${partnerData.countryCode}.png" alt="${partnerData.countryName}" style="vertical-align: middle; margin: 0 4px; border-radius: 2px;">`
         : `🌍`;
-        
-    statusMsg.innerHTML = `Connected to a stranger from ${flagHTML} <b>${partnerData.countryName}</b>!`;
-    
-    currentPartner = { id: data.partnerUUID || data.partnerId, name: partnerData.countryName };
-    
+
+    const displayName = partnerData.randomName || partnerData.countryName;
+
+    statusMsg.innerHTML = `Connected to ${flagHTML} <b>${displayName}</b> (${partnerData.countryName})!`;
+
+    currentPartner = { id: data.partnerUUID || data.partnerId, name: displayName };
+
     // Turn on Timer
     logoCircle.classList.add('active-call');
     callTimer.style.display = 'block';
     callStartTime = Date.now();
     callTimer.textContent = '00:00:00';
-    
+
     clearInterval(callInterval);
     callInterval = setInterval(() => {
         const diff = Math.floor((Date.now() - callStartTime) / 1000);
@@ -250,16 +307,16 @@ socket.on('matched', async (data) => {
         callTimer.textContent = timeStr;
         callTimerVideo.textContent = timeStr;
     }, 1000);
-    
+
     // Enable chat
     chatInput.disabled = false;
     sendBtn.disabled = false;
     cameraBtn.disabled = false;
     chatMessages.innerHTML = '';
-    
+
     const sysMsgDiv = document.createElement('div');
     sysMsgDiv.classList.add('system-msg');
-    sysMsgDiv.innerHTML = `You are now talking to a stranger from ${flagHTML} <b>${partnerData.countryName}</b>. Say hi!`;
+    sysMsgDiv.innerHTML = `You are now talking to ${flagHTML} <b>${currentPartner.name}</b> from ${partnerData.countryName}. Say hi!`;
     chatMessages.appendChild(sysMsgDiv);
 
     peerConnection = new RTCPeerConnection(servers);
@@ -279,7 +336,7 @@ socket.on('matched', async (data) => {
             remoteVideo.srcObject = event.streams[0];
             logoCircle.style.display = 'none';
             videoContainer.style.display = 'block';
-            
+
             event.track.onended = () => {
                 remoteVideo.srcObject = null;
                 if (!isVideoOn) {
@@ -310,14 +367,14 @@ socket.on('offer', async (data) => {
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         socket.emit('answer', answer);
-    } catch(e) { }
+    } catch (e) { }
 });
 
 socket.on('answer', async (data) => {
     if (!peerConnection) return;
     try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-    } catch(e) { }
+    } catch (e) { }
 });
 
 socket.on('ice-candidate', async (candidate) => {
@@ -333,7 +390,7 @@ socket.on('partner-disconnected', () => {
     addSystemMessage('Stranger disconnected.');
     cleanupCall();
     if (autoCallCheckbox.checked) {
-       setTimeout(startCall, 1000); // slight delay before calling again
+        setTimeout(startCall, 1000); // slight delay before calling again
     }
 });
 
@@ -342,7 +399,7 @@ muteBtn.addEventListener('click', () => {
     if (!localStream) return;
     isMuted = !isMuted;
     localStream.getAudioTracks()[0].enabled = !isMuted;
-    
+
     if (isMuted) {
         muteBtn.style.backgroundColor = '#e74c3c'; // Warning red or similar
         muteBtn.style.borderColor = '#e74c3c';
@@ -357,31 +414,31 @@ muteBtn.addEventListener('click', () => {
 // 5. Video toggle logic
 videoBtn.addEventListener('click', async () => {
     if (!isCalling || !peerConnection) return;
-    
+
     if (!isVideoOn) {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             videoTrack = stream.getVideoTracks()[0];
             localVideo.srcObject = stream;
-            
+
             peerConnection.addTrack(videoTrack, stream);
-            
+
             isVideoOn = true;
             videoBtn.style.background = 'linear-gradient(135deg, #e74c3c, #c0392b)';
             videoBtn.innerHTML = '<i class="fas fa-video"></i>';
             videoBtnText.style.color = '#e74c3c';
             videoBtnText.textContent = 'Stop Video';
-            
+
             logoCircle.style.display = 'none';
             videoContainer.style.display = 'block';
-            
+
             // Renegotiate mid-call
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             socket.emit('offer', offer);
-            
+
             videoTrack.onended = stopCamera;
-        } catch(e) {
+        } catch (e) {
             addSystemMessage('Camera access denied!');
         }
     } else {
@@ -394,25 +451,25 @@ async function stopCamera() {
     videoTrack.stop();
     const senders = peerConnection.getSenders();
     const sender = senders.find(s => s.track === videoTrack);
-    if(sender) peerConnection.removeTrack(sender);
+    if (sender) peerConnection.removeTrack(sender);
     videoTrack = null;
     isVideoOn = false;
-    
+
     videoBtn.style.background = '';
     videoBtn.innerHTML = '<i class="fas fa-video-slash"></i>';
     videoBtnText.style.color = '#50606e';
     videoBtnText.textContent = 'Video';
     localVideo.srcObject = null;
-    
+
     // Renegotiate removal
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     socket.emit('offer', offer);
-    
+
     // Reverse UI if stranger has no video on
-    if(!remoteVideo.srcObject) {
-       logoCircle.style.display = 'flex';
-       videoContainer.style.display = 'none';
+    if (!remoteVideo.srcObject) {
+        logoCircle.style.display = 'flex';
+        videoContainer.style.display = 'none';
     }
 }
 
@@ -427,34 +484,34 @@ addFriendBtn.addEventListener('click', () => {
 socket.on('friend-request', () => {
     const msgEl = document.createElement('div');
     msgEl.classList.add('system-msg');
-    
+
     const textSpan = document.createElement('span');
     textSpan.textContent = 'Stranger sent a friend request. ';
-    
+
     const acceptBtn = document.createElement('button');
     acceptBtn.className = 'accept-btn';
     acceptBtn.textContent = 'Accept';
-    
+
     acceptBtn.onclick = () => {
         socket.emit('accept-friend');
         if (currentPartner && !friendsList.find(f => f.id === currentPartner.id)) {
-            friendsList.push({...currentPartner});
+            friendsList.push({ ...currentPartner });
         }
         msgEl.textContent = 'You are now friends!';
         addFriendBtn.style.color = '#2eac5f';
     };
-    
+
     msgEl.appendChild(textSpan);
     msgEl.appendChild(acceptBtn);
-    
+
     chatMessages.appendChild(msgEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
 });
 
 socket.on('friend-accepted', () => {
     addSystemMessage('Stranger accepted your friend request!');
     if (currentPartner && !friendsList.find(f => f.id === currentPartner.id)) {
-        friendsList.push({...currentPartner});
+        friendsList.push({ ...currentPartner });
     }
     addFriendBtn.style.color = '#2eac5f';
 });
@@ -463,19 +520,19 @@ socket.on('friend-accepted', () => {
 function sendMessage() {
     const text = chatInput.value.trim();
     if (!text || !isCalling) return;
-    
+
     socket.emit('chat-message', text);
-    
+
     socket.emit('stop-typing');
     clearTimeout(typingTimeout);
-    
+
     // add to ui
     const msgEl = document.createElement('div');
     msgEl.classList.add('message', 'local');
     msgEl.textContent = text;
     chatMessages.appendChild(msgEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    
+    chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+
     chatInput.value = '';
 }
 
@@ -484,34 +541,34 @@ cameraBtn.addEventListener('click', () => {
     if (isCalling) imageInput.click();
 });
 
-imageInput.addEventListener('change', function() {
+imageInput.addEventListener('change', function () {
     const file = this.files[0];
     if (!file || !isCalling) return;
-    
+
     // Prevent massive images from crashing the socket loop (3MB max)
     if (file.size > 3 * 1024 * 1024) {
         addSystemMessage("Image is too large. Max size is 3MB.");
         this.value = '';
         return;
     }
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
         const imgDataUrl = e.target.result;
         socket.emit('chat-image', imgDataUrl);
-        
+
         // Add to local UI immediately
         const msgEl = document.createElement('div');
         msgEl.classList.add('message', 'local');
         const imgEl = document.createElement('img');
         imgEl.src = imgDataUrl;
         msgEl.appendChild(imgEl);
-        
+
         chatMessages.appendChild(msgEl);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
     };
     reader.readAsDataURL(file);
-    
+
     // clear input for identical subsequent uploads
     this.value = '';
 });
@@ -520,9 +577,9 @@ let typingTimeout = null;
 
 chatInput.addEventListener('input', () => {
     if (!isCalling) return;
-    
+
     socket.emit('typing');
-    
+
     clearTimeout(typingTimeout);
     typingTimeout = setTimeout(() => {
         socket.emit('stop-typing');
@@ -534,12 +591,26 @@ chatInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
+function handleIncomingMessageUI() {
+    if (window.innerWidth <= 850) {
+        if (!mainChatContent.classList.contains('open')) {
+            unreadMessagesCount++;
+            chatUnreadBadge.textContent = unreadMessagesCount;
+            chatUnreadBadge.style.display = 'flex';
+        } else {
+            chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+        }
+    } else {
+        chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+    }
+}
+
 socket.on('chat-message', (msg) => {
     const msgEl = document.createElement('div');
     msgEl.classList.add('message', 'remote');
     msgEl.textContent = msg;
     chatMessages.appendChild(msgEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    handleIncomingMessageUI();
 });
 
 socket.on('chat-image', (imgData) => {
@@ -548,12 +619,12 @@ socket.on('chat-image', (imgData) => {
     const imgEl = document.createElement('img');
     imgEl.src = imgData;
     msgEl.appendChild(imgEl);
-    
+
     chatMessages.appendChild(msgEl);
-    
+
     // Must wait for image paint to calculate correct scrollHeight
     imgEl.onload = () => {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        handleIncomingMessageUI();
     };
 });
 
@@ -562,7 +633,7 @@ function addSystemMessage(text) {
     msgEl.classList.add('system-msg');
     msgEl.textContent = text;
     chatMessages.appendChild(msgEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
 }
 
 // 7. Online users count
@@ -607,14 +678,14 @@ document.getElementById('closePanelBtn').addEventListener('click', () => {
 function openPanel(dataList) {
     sidePanel.classList.add('open');
     panelContent.innerHTML = '<div style="text-align:center; color:#7b84aa; margin-top:20px;"><i class="fas fa-spinner fa-spin"></i> Loading metadata...</div>';
-    
+
     if (dataList.length === 0) {
         panelContent.innerHTML = '<div style="text-align:center; color:#7b84aa; margin-top:20px; font-weight: 500;">Nothing to show yet.<br>Call someone first! 🌏</div>';
         return;
     }
 
     const ids = dataList.map(item => item.id);
-    
+
     socket.emit('check-status', ids, (statuses) => {
         panelContent.innerHTML = '';
         dataList.forEach(item => {
@@ -626,7 +697,7 @@ function openPanel(dataList) {
                         <div class="status-dot ${isOnline ? 'online' : 'offline'}"></div>
                     </div>
                     <div class="list-item-info">
-                        <div class="list-item-title">Stranger from ${item.name}</div>
+                        <div class="list-item-title">${item.name}</div>
                         <div class="list-item-sub">${item.timestamp ? 'Called at ' + item.timestamp : (isOnline ? 'Online Now' : 'Offline')}</div>
                     </div>
                     ${isOnline ? `<button class="direct-call-btn" data-uuid="${item.id}" data-name="${item.name}"><i class="fas fa-phone-volume"></i></button>` : ''}
@@ -646,10 +717,10 @@ document.addEventListener('click', (e) => {
         }
         const uuid = btn.getAttribute('data-uuid');
         const name = btn.getAttribute('data-name');
-        
+
         socket.emit('request-direct-call', { targetUUID: uuid });
-        
-        statusMsg.innerHTML = `Calling Stranger from <b>${name}</b>...`;
+
+        statusMsg.innerHTML = `Calling <b>${name}</b>...`;
         callBtn.style.background = 'linear-gradient(135deg, #f39c12, #f1c40f)';
         callBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
         callBtn.nextElementSibling.textContent = 'Ringing...';
@@ -665,9 +736,9 @@ socket.on('incoming-direct-call', (data) => {
         return;
     }
     pendingDirectCallId = data.callerUUID;
-    document.getElementById('incomingCallerName').textContent = 'Stranger from ' + data.callerName;
+    document.getElementById('incomingCallerName').textContent = data.callerName;
     document.getElementById('incomingCallNotification').classList.add('show');
-    
+
     // Auto timeout after 60s
     setTimeout(() => {
         if (pendingDirectCallId === data.callerUUID) {
@@ -704,3 +775,139 @@ socket.on('direct-call-declined', (data) => {
         cleanupCall();
     }, 3000);
 });
+
+// 11. Fullscreen / Expand Video Logic
+if (expandVideoBtn) {
+    expandVideoBtn.addEventListener('click', () => {
+        document.body.classList.toggle('video-fullscreen');
+        videoContainer.classList.toggle('fullscreen');
+        const icon = expandVideoBtn.querySelector('i');
+        if (videoContainer.classList.contains('fullscreen')) {
+            icon.classList.remove('fa-expand');
+            icon.classList.add('fa-compress');
+        } else {
+            icon.classList.remove('fa-compress');
+            icon.classList.add('fa-expand');
+        }
+    });
+}
+
+// 12. Top Bar Navigation Hooks
+const toggleFiltersBtn = document.getElementById('toggleFiltersBtn');
+const filterContainer = document.getElementById('filterDropdown');
+
+// Initially hide filter container if not already handled by CSS
+if (filterContainer) filterContainer.style.display = 'none';
+
+if (toggleFiltersBtn) {
+    toggleFiltersBtn.addEventListener('click', (e) => {
+        // Prevent body click from hiding it immediately
+        e.stopPropagation();
+        if (filterContainer.style.display === 'none') {
+            filterContainer.style.display = 'flex';
+        } else {
+            filterContainer.style.display = 'none';
+        }
+    });
+
+    // Close when clicking outside
+    document.addEventListener('click', (e) => {
+        if (filterContainer && !filterContainer.contains(e.target) && !toggleFiltersBtn.contains(e.target)) {
+            filterContainer.style.display = 'none';
+        }
+    });
+}
+
+const myProfileBadge = document.getElementById('myProfileBadge');
+if (myProfileBadge) {
+    myProfileBadge.addEventListener('click', () => {
+        const onboardGender = document.getElementById('onboardGender');
+
+        if (myCurrentGender && myCurrentGender !== 'any') {
+            onboardGender.value = myCurrentGender;
+            onboardGender.disabled = false; // Allow them to change it if they want
+        }
+
+        // Show a temporary close button since they are just editing
+        let closeBtn = document.getElementById('onboardCloseBtn');
+        if (!closeBtn) {
+            closeBtn = document.createElement('button');
+            closeBtn.id = 'onboardCloseBtn';
+            closeBtn.textContent = 'Cancel';
+            closeBtn.className = 'incoming-btn-large decline';
+            closeBtn.style.marginTop = '10px';
+            closeBtn.type = 'button';
+            closeBtn.onclick = () => {
+                onboardOverlay.classList.remove('show');
+            };
+            onboardForm.appendChild(closeBtn);
+        }
+        closeBtn.style.display = 'block';
+
+        onboardOverlay.classList.add('show');
+    });
+}
+
+// 13. Mobile Chat Toggle Hooks
+const mobileChatToggleBtn = document.getElementById('mobileChatToggleBtn');
+const mainChatContent = document.getElementById('mainChatContent');
+const closeChatMobileBtn = document.getElementById('closeChatMobileBtn');
+const chatUnreadBadge = document.getElementById('chatUnreadBadge');
+
+let unreadMessagesCount = 0;
+
+if (mobileChatToggleBtn && closeChatMobileBtn && mainChatContent) {
+    mobileChatToggleBtn.addEventListener('click', () => {
+        mainChatContent.classList.add('open');
+        unreadMessagesCount = 0;
+        if (chatUnreadBadge) {
+            chatUnreadBadge.textContent = '0';
+            chatUnreadBadge.style.display = 'none';
+        }
+        // Auto scroll to latest messages on mobile open
+        if (chatMessages) {
+            chatMessages.parentElement.scrollTop = chatMessages.parentElement.scrollHeight;
+        }
+    });
+
+    closeChatMobileBtn.addEventListener('click', () => {
+        mainChatContent.classList.remove('open');
+    });
+}
+
+// 14. Report and Block Logic
+const reportBtn = document.getElementById('reportBtn');
+const reportOverlay = document.getElementById('reportOverlay');
+const reportForm = document.getElementById('reportForm');
+const cancelReportBtn = document.getElementById('cancelReportBtn');
+
+if (reportBtn && reportOverlay) {
+    reportBtn.addEventListener('click', () => {
+        if (!isCalling) return;
+        reportOverlay.classList.add('show');
+    });
+}
+
+if (cancelReportBtn && reportOverlay) {
+    cancelReportBtn.addEventListener('click', () => {
+        reportOverlay.classList.remove('show');
+    });
+}
+
+if (reportForm && reportOverlay) {
+    reportForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const reason = document.getElementById('reportReason').value;
+        if (!reason || !isCalling) return;
+
+        socket.emit('report-block', { reason });
+        reportOverlay.classList.remove('show');
+        addSystemMessage('You have reported and blocked this stranger.');
+
+        // Immediately disconnect local UI and jump to next if auto-call enabled
+        cleanupCall();
+        if (autoCallCheckbox && autoCallCheckbox.checked) {
+            startCall();
+        }
+    });
+}

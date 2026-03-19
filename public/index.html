@@ -1,19 +1,66 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIRTALK - Stranger Audio Call</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=5">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
 </head>
-<body>
-    <!-- Top Left Icon -->
-    <button class="top-icon-btn" id="openFriendsBtn">
-        <i class="fas fa-user-friends"></i>
-    </button>
 
+<body>
+    <!-- Top Navigation Bar -->
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <div class="top-online-status">
+                <div class="online-dot-top"></div>
+                <span class="top-online-text">Online</span>
+                <div class="top-online-count-wrapper">
+                    <i class="fas fa-user-friends"></i>
+                    <span id="onlineCount">0</span>
+                </div>
+            </div>
+
+            <div class="top-filter-wrapper" style="position: relative;">
+                <button class="top-nav-btn" id="toggleFiltersBtn">
+                    <i class="fas fa-sliders-h"></i>
+                    <span>FILTERS</span>
+                </button>
+                <div class="filter-dropdown list-item" id="filterDropdown"
+                    style="display: none; position: absolute; top: 110%; left: 0; background: rgba(15, 16, 38, 0.95); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 18px; padding: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); flex-direction: column; gap: 10px; width: 220px; z-index: 1000;">
+                    <select id="myGender" class="filter-select" style="width: 100%;">
+                        <option value="any">I am: Secret</option>
+                        <option value="male">I am: Male</option>
+                        <option value="female">I am: Female</option>
+                    </select>
+                    <select id="targetGender" class="filter-select" style="width: 100%;">
+                        <option value="any">Meet: Any Gender</option>
+                        <option value="male">Meet: Male</option>
+                        <option value="female">Meet: Female</option>
+                    </select>
+                    <select id="targetCountry" class="filter-select" style="width: 100%;">
+                        <option value="any">Meet: Any</option>
+                        <option value="same">Meet: Same Country</option>
+                    </select>
+                </div>
+            </div>
+
+            <button class="top-nav-btn" id="openFriendsBtn">
+                <i class="fas fa-user-plus"></i>
+                <span>FRIENDS</span>
+            </button>
+        </div>
+
+        <div class="top-bar-right">
+            <div class="top-profile-badge" id="myProfileBadge">
+                <i class="fas fa-user-circle"></i>
+                <span id="myProfileName">Stranger</span>
+            </div>
+        </div>
+    </div>
     <!-- Left Slide Panel -->
     <div class="side-panel" id="sidePanel">
         <div class="panel-header">
@@ -22,6 +69,12 @@
         </div>
         <div class="panel-content" id="panelContent">
             <!-- List items dynamically injected here -->
+        </div>
+
+        <!-- Google Ad Placeholder -->
+        <div class="ad-container" style="margin-top: 20px;">
+            <span class="ad-label">Sponsored</span>
+            <a href="#" target="_blank"><img src="images/chat_ad.png" alt="Ad"></a>
         </div>
     </div>
 
@@ -41,6 +94,7 @@
                     <video id="remoteVideo" autoplay playsinline></video>
                     <video id="localVideo" autoplay playsinline muted></video>
                     <div class="call-timer-video" id="callTimerVideo">00:00:00</div>
+                    <button class="expand-btn" id="expandVideoBtn"><i class="fas fa-expand"></i></button>
                 </div>
             </div>
 
@@ -89,40 +143,32 @@
                 </a>
             </div>
 
-            <div class="filter-container">
-                <select id="myGender" class="filter-select">
-                    <option value="any">I am: Secret</option>
-                    <option value="male">I am: Male</option>
-                    <option value="female">I am: Female</option>
-                </select>
-                <select id="targetGender" class="filter-select">
-                    <option value="any">Meet: Any Gender</option>
-                    <option value="male">Meet: Male</option>
-                    <option value="female">Meet: Female</option>
-                </select>
-                <select id="targetCountry" class="filter-select">
-                    <option value="any">Meet: Any Country</option>
-                    <option value="same">Meet: Same Country</option>
-                </select>
-            </div>
+
 
             <p class="status-msg">Tap the <span class="highlight-green">Call</span> button to call a new stranger</p>
+
+            <!-- Google Ad Placeholder -->
+            <div class="ad-container" style="margin-top: auto;">
+                <span class="ad-label">Advertisement</span>
+                <a href="#" target="_blank"><img src="images/vpn_ad.png" alt="Ad"></a>
+            </div>
         </div>
 
         <!-- Right Side (Chat / Interaction Area) -->
-        <div class="main-content">
-            <div class="online-badge">
-                <div class="online-dot"></div>
-                <span id="onlineCount">0</span> Online Now
+        <div class="main-content" id="mainChatContent">
+            <div class="chat-header-mobile">
+                <h3 style="color:white; margin:0; font-size:18px;"><i class="fas fa-comments"></i> Chat</h3>
+                <button class="close-btn" id="closeChatMobileBtn"
+                    style="color: #a7bcc8; font-size:20px; background:none; border:none; cursor:pointer;"><i
+                        class="fas fa-times"></i></button>
             </div>
-            
             <div class="chat-area">
                 <div class="chat-bg-pattern"></div>
                 <div class="chat-messages" id="chatMessages">
                     <!-- Messages will appear here -->
                 </div>
             </div>
-            
+
             <div class="typing-indicator" id="typingIndicator" style="display: none;">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span> typing...
             </div>
@@ -135,7 +181,73 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- Website SEO Content & Advertising -->
+    <div class="website-content">
+        <div class="banner-ad-container">
+            <span class="ad-label" style="top:5px; left:5px;">Sponsored</span>
+            <a href="#" target="_blank"><img src="images/banner_ad.png" alt="Banner Ad"></a>
+        </div>
+
+        <section class="info-section">
+            <h2>Welcome to AIRTALK - The Best Random Video & Audio Chat</h2>
+            <p>AIRTALK is a free platform that allows you to instantly connect with strangers from all around the world.
+                Whether you want to practice a new language, share your thoughts, or simply make new friends, AIRTALK
+                provides a sleek and secure environment.</p>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <i class="fas fa-bolt"></i>
+                    <h3>Instant Connections</h3>
+                    <p>No registration required. Just hit the call button to get randomly paired in seconds.</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-shield-alt"></i>
+                    <h3>Safe & Anonymous</h3>
+                    <p>Your privacy is our priority. Talk entirely anonymously or use a custom profile, the choice is
+                        yours.</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-globe"></i>
+                    <h3>Global Filters</h3>
+                    <p>Easily filter connections by gender or country to meet exactly the kind of people you're looking
+                        for!</p>
+                </div>
+            </div>
+        </section>
+
+        <div class="banner-ad-container">
+            <span class="ad-label" style="top:5px; left:5px;">Advertisement</span>
+            <a href="#" target="_blank"><img src="images/banner_ad.png" alt="Banner Ad"></a>
+        </div>
+
+        <section class="info-section">
+            <h2>Community Rules</h2>
+            <p>To ensure a fun and safe experience for everyone, please adhere to our strict community guidelines. Any
+                form of harassment, nudity, or inappropriate behavior is not tolerated and will result in a permanent
+                ban.</p>
+            <ul>
+                <li>Be respectful and kind to others.</li>
+                <li>No nudity or sexually explicit content.</li>
+                <li>Do not spam or advertise other platforms.</li>
+            </ul>
+        </section>
+
+        <footer class="site-footer">
+            <p>&copy; 2026 AIRTALK. All rights reserved.</p>
+            <div class="footer-links">
+                <a href="#">Privacy Policy</a>
+                <a href="#">Terms of Service</a>
+                <a href="#">Contact Us</a>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Mobile Chat Toggle Button -->
+    <button class="mobile-chat-toggle" id="mobileChatToggleBtn">
+        <i class="fas fa-comment-dots"></i>
+        <span class="unread-badge" id="chatUnreadBadge" style="display: none;">0</span>
+    </button>
+
     <audio id="remoteAudio" autoplay></audio>
 
     <!-- Incoming Call Notification Popup -->
@@ -145,15 +257,55 @@
         </div>
         <div class="incoming-title" id="incomingCallerName">Unknown</div>
         <div class="incoming-subtitle">is calling you...</div>
-        
+
         <div class="incoming-actions-large">
             <button id="acceptDirectCallBtn" class="incoming-btn-large accept">Accept</button>
             <button id="declineDirectCallBtn" class="incoming-btn-large decline">Cancel</button>
         </div>
     </div>
-    
+
+    <!-- Onboarding Modal -->
+    <div id="onboardOverlay" class="onboard-overlay">
+        <div class="onboard-card">
+            <h2>Welcome to AIRTALK</h2>
+            <form id="onboardForm">
+                <select id="onboardGender" class="onboard-select" required>
+                    <option value="" disabled selected>Select your gender</option>
+                    <option value="male" style="color: black;">Male</option>
+                    <option value="female" style="color: black;">Female</option>
+                    <option value="any" style="color: black;">Secret / Other</option>
+                </select>
+                <button type="submit" class="incoming-btn-large accept"
+                    style="width: 100%; margin-top: 15px; padding: 18px;">Start Talking</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Report Modal -->
+    <div id="reportOverlay" class="onboard-overlay">
+        <div class="onboard-card">
+            <h2 style="color:#e74c3c; margin-bottom: 10px;">Report Stranger</h2>
+            <p style="color:#a7bcc8; font-size:14px; margin-bottom:20px;">Why are you reporting this user?</p>
+            <form id="reportForm">
+                <select id="reportReason" class="onboard-select" required>
+                    <option value="" disabled selected>Select a reason...</option>
+                    <option value="nudity" style="color: black;">Nudity or Sexual Content</option>
+                    <option value="harassment" style="color: black;">Harassment or Hate Speech</option>
+                    <option value="spam" style="color: black;">Spam or Scam</option>
+                    <option value="other" style="color: black;">Other</option>
+                </select>
+                <div class="incoming-actions-large" style="margin-top: 15px;">
+                    <button type="submit" class="incoming-btn-large decline">Block & Report</button>
+                    <button type="button" class="incoming-btn-large accept" id="cancelReportBtn"
+                        style="background: rgba(255,255,255,0.1); color: white; box-shadow: none;">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="/socket.io/socket.io.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=10"></script>
 </body>
+
 </html>
