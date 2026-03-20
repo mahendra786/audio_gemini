@@ -122,46 +122,24 @@ let currentPartner = null;
 
 let videoTrack = null;
 let isVideoOn = false;
+let myCallRole = null;
 
 const servers = {
     iceServers: [
-        // Google STUN servers
+        // High-reliability Anycast STUN servers for long-distance bridging
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        // Cloudflare STUN
+        { urls: 'stun:global.stun.twilio.com:3478' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        // Open Relay TURN — UDP 80
+
+        // Reliable Free TURN servers (Metered OpenRelay)
         {
-            urls: 'turn:openrelay.metered.ca:80',
+            urls: [
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:443',
+                'turn:openrelay.metered.ca:443?transport=tcp'
+            ],
             username: 'openrelayproject',
             credential: 'openrelayproject'
-        },
-        // Open Relay TURN — HTTPS 443
-        {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        // Open Relay TURN — TLS over TCP (most firewall-friendly)
-        {
-            urls: 'turns:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        // Numb TURN (fallback)
-        {
-            urls: 'turn:numb.viagenie.ca',
-            username: 'webrtc@live.com',
-            credential: 'muazkh'
-        },
-        // Xirsys-compatible public TURN
-        {
-            urls: 'turn:relay.backups.cz',
-            username: 'webrtc',
-            credential: 'webrtc'
         }
     ],
     iceCandidatePoolSize: 10,
@@ -295,6 +273,7 @@ socket.on('waiting', () => {
 
 socket.on('matched', async (data) => {
     isCalling = true;
+    myCallRole = data.role;
 
     // Reveal Video Button
     videoBtnWrapper.style.display = 'flex';
@@ -384,18 +363,20 @@ socket.on('matched', async (data) => {
     };
 
     // Monitor ICE connection state for diagnostics / auto-recovery
-    peerConnection.oniceconnectionstatechange = () => {
+    peerConnection.oniceconnectionstatechange = async () => {
         const state = peerConnection ? peerConnection.iceConnectionState : 'closed';
         console.log('ICE connection state:', state);
-        if (state === 'failed') {
-            console.warn('ICE failed — attempting ICE restart');
-            // Attempt ICE restart
-            if (peerConnection && peerConnection.signalingState !== 'closed') {
-                peerConnection.restartIce ? peerConnection.restartIce() : null;
+        if (state === 'failed' || state === 'disconnected') {
+            console.warn('ICE state failed or disconnected — attempting ICE restart');
+            if (myCallRole === 'caller' && peerConnection && peerConnection.signalingState !== 'closed') {
+                try {
+                    const offer = await peerConnection.createOffer({ iceRestart: true });
+                    await peerConnection.setLocalDescription(offer);
+                    socket.emit('offer', offer);
+                } catch (err) {
+                    console.error('ICE restart offer creation failed', err);
+                }
             }
-        }
-        if (state === 'disconnected') {
-            console.warn('ICE disconnected — connection may recover');
         }
     };
 
